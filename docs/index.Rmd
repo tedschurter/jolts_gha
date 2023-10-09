@@ -1,0 +1,1769 @@
+---
+title: "<span style='font-size: 23px'>Job Openings and Labor Turnover Survey (JOLTS) `r format(Sys.Date(), '%B %Y')` update</span>"
+author: "<br><span style='font-size: 13px'>Ted Schurter</span> "                       
+date:   "<span style='font-size: 13px'>`r format(Sys.Date(), '%B %d, %Y')`</span>"
+output:
+  html_document:
+    theme: lumen
+    highlight: breezedark
+---
+
+<style type="text/css">
+.main-container {
+  max-width: 1600px;
+  margin-left: autopx;
+  margin-right: 150px;
+  padding-left: 150px;
+  line-height: 1;
+  
+}
+
+
+h1 { 
+    display: block;  
+    font-weight: none;
+    line-height: .65;
+    }
+
+
+h4 {
+    line-height: .2;
+    color: #848889; 
+    font-size: 14pt;
+
+}
+
+h5 {
+    line-height: 1;
+    color: #181919; 
+    font-size: 12pt;
+
+}
+
+.section {
+    font-size: 15pt
+}
+
+
+ul {
+    line-height: .9;
+    color: #181919; 
+    font-size: 11pt;
+
+}
+
+ol {
+    line-height: .9;
+    color: #181919; 
+    font-size: 11pt;
+
+}
+
+</style>
+
+
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = F)
+knitr::opts_chunk$set(warning = F)
+knitr::opts_chunk$set(message = F)
+
+```
+
+
+```{r load libraries}
+library(tidyverse)
+library(blsR)
+library(ggtext)
+library(scales)
+library(DT)
+library(aws.s3)
+```
+
+
+```{r, import latest JOLTS data, }
+
+# import latest JOLTS data from BLS API
+
+jolts <- data.frame(get_series_tables(
+  series_ids = list(ldl = "JTS000000000000000LDL",  # layoffs and discharges levels
+                    ldr = "JTS000000000000000LDR",  # layoffs and discharges rate
+                    ql  = "JTS000000000000000QUL",  # quit levels
+                    qr  = "JTS000000000000000QUR",  # quit rate
+                    hl  = "JTS000000000000000HIL",  # hires levels
+                    hr  = "JTS000000000000000HIR",  # hires rate
+                    tsl = "JTS000000000000000TSL",  # total separation level
+                    tsr = "JTS000000000000000TSR",  # total separation rate
+                    jol = "JTS000000000000000JOL",  # job openings level
+                    jor = "JTS000000000000000JOR"   # job openings rate
+  ),
+  start_year = 2013,
+  end_year   = 2023,
+  # enable API line if BLS API key available.
+  #api_key = bls_get_key(),
+)) %>%
+
+  # select a column for year, period (month), periodName (month name), and all the
+  # columns that contain the values we want to keep for each series' data
+  select("year" = ldl.year, "period" = ldl.period, "periodName" = ldl.periodName,
+         "ldl" = ldl.value, "ldr" = ldr.value, "ql" = ql.value,
+         "qr" = qr.value, "hl" = hl.value, "hr" = hr.value,  "tsl" = tsl.value,
+         "tsr" = tsr.value, "jol" = jol.value, "jor" = jor.value) %>%
+
+  # create Date column
+  mutate(date = as.Date(readr::parse_date(paste0(year, "-", periodName, "-", "1"),
+                                          "%Y-%B-%d"))) %>%
+  # pivot to long data
+  pivot_longer(
+    cols = c(ldl, ldr, ql, qr, hl, hr, tsl, tsr, jol, jor),
+    names_to = "series",
+    values_to = "value"
+  ) %>%
+
+  # group by series and month before calculating median and mean for each series
+  group_by(series, period) %>%
+  mutate(md_rate = median(value),
+         mn_rate = mean(value)) %>%
+  ungroup() %>%
+  arrange(desc(date))
+
+# write newest data to csv file
+write_csv(jolts, "../clean_data/new_jolts.csv")
+
+```
+
+
+```{r, import existing jolts data}
+
+# import existing JOLTS data from AWS S3 storage 
+
+# assign bucket, and region
+bucket <- "jolts-data-public" # name of bucket where jolts file is hosted
+region <- "us-east-2" # bucket assigned to us-east-2 region
+
+# existing jolts data stored in public AWS S3 bucket
+old_jolts <- read_csv(
+  # use save object function from aws.s3 package
+  save_object(
+  object = "current_jolts.csv", # object name in S3 bucket
+  bucket = bucket,
+  region = region,
+  file = "../clean_data/current_jolts_20231009.csv" ) # local location and name for file 
+  ) 
+
+
+```
+
+
+```{r, compare existing and new jolts data, include=F}
+
+# if the data from BLS (jolts dataframe) is the same as the existing data in the AWS bucket (old_jolts dataframe), no update is needed, stop running the Rmd file; no index will be created.
+
+ if(identical(jolts[1,4], old_jolts[1,4]) == F) stop("No update needed")
+("")
+
+# if the data from BLS (jolts dataframe) is not the same as the existing data in the AWS bucket (old_jolts dataframe), replace the file in the AWS bucket with the most recent data from BLS
+
+# if(identical(jolts[1,4], old_jolts[1,4]) == F)  put_object(
+#   file = "clean_data/new_jolts.csv", 
+#   object = "current_jolts.csv", 
+#   bucket = bucket,
+#   region = region
+# )
+
+```
+
+
+```{r, calculate figures for titles and text}
+
+# calculate figures for titles and text
+
+# period for most recent month
+max_mnth <- jolts %>% arrange(desc(year)) %>% slice(1) %>% pull(2)
+
+# character name for most recent month - ie "July"
+max_mnth_ch <- jolts %>% arrange(desc(year)) %>% slice(1) %>% pull(3)
+
+
+# determine previous mnth
+prev_mnth <- paste0("M", if_else(
+  as.numeric(
+    str_sub(
+      max_mnth, -1)
+  ) 
+  <= 9, "0", ""), 
+  -1+ (as.numeric(str_sub(max_mnth, -1))))
+
+
+max_yr <- max(jolts$year)
+
+
+# job opening figures ####
+
+# current month job opening rate
+jor_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "jor"]
+
+# previous month job opening rate
+jor_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "jor"] 
+
+# job opening rate difference from last month
+jor_dif_lst_mnth <- jor_current_mnth - jor_prev_mnth
+
+# current month job opening level
+jol_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "jol"]
+
+# previous month job opening level
+jol_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "jol"] 
+
+# job opening rate difference from last month
+jol_dif_lst_mnth <- jol_current_mnth - jol_prev_mnth
+
+
+# total separation figures ####
+
+# current month total separation rate
+tsr_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "tsr"]
+
+# previous month total separation rate
+tsr_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "tsr"] 
+
+# total separation rate difference from last month
+tsr_dif_lst_mnth <- tsr_current_mnth - tsr_prev_mnth
+
+# current month total separation level
+tsl_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "tsl"]
+
+# previous month total separation level
+tsl_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "tsl"] 
+
+# total separation rate difference from last month
+tsl_dif_lst_mnth <- tsl_current_mnth - tsl_prev_mnth
+
+# hires figures ####
+  
+# current month quits rate
+hr_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                 jolts$period == max_mnth & 
+                                 jolts$series == "hr"]
+
+# previous month quit rate
+hr_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                              jolts$period == prev_mnth & 
+                              jolts$series == "hr"]  
+
+# quits rate difference from last month
+hr_dif_lst_mnth <- hr_current_mnth - hr_prev_mnth
+
+
+# current month quits level
+hl_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                 jolts$period == max_mnth & 
+                                 jolts$series == "hl"]
+
+# previous month quit rate level
+hl_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                              jolts$period == prev_mnth & 
+                              jolts$series == "hl"]  
+
+# quits level difference from last month
+hl_dif_lst_mnth <- hl_current_mnth - hl_prev_mnth
+  
+# quits figures ####
+# current month quits rate
+
+qr_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                 jolts$period == max_mnth & 
+                                 jolts$series == "qr"]
+
+# previous month quit rate
+qr_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                              jolts$period == prev_mnth & 
+                              jolts$series == "qr"]  
+
+# quits rate difference from last month
+qr_dif_lst_mnth <- qr_current_mnth - qr_prev_mnth
+
+
+# current month quits level
+ql_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                 jolts$period == max_mnth & 
+                                 jolts$series == "ql"]
+
+# previous month quit rate level
+ql_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                              jolts$period == prev_mnth & 
+                              jolts$series == "ql"]  
+
+# quits level difference from last month
+ql_dif_lst_mnth <- ql_current_mnth - ql_prev_mnth
+
+
+
+# layoffs and discharges figures ####
+
+# current month layoffs and discharges rate
+ldr_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "ldr"]
+
+# previous month layoffs and discharges rate
+ldr_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "ldr"]  
+
+# layoffs and discharges rate difference from last month
+ldr_dif_lst_mnth <- ldr_current_mnth - ldr_prev_mnth
+
+
+# current month layoffs and discharges level
+ldl_current_mnth <- jolts$value[jolts$year == max_yr & 
+                                  jolts$period == max_mnth & 
+                                  jolts$series == "ldl"]
+
+# previous month layoffs and discharges level
+ldl_prev_mnth <- jolts$value[jolts$year == max_yr  & 
+                               jolts$period == prev_mnth & 
+                               jolts$series == "ldl"]  
+
+# layoffs and discharges levels difference from last month
+ldl_dif_lst_mnth <- ldl_current_mnth - ldl_prev_mnth
+```
+
+
+```{r, additional dataframes for plots}
+# create additional dataframes for plots
+
+jolts$date <- as.Date(jolts$date)
+
+# dataframe for last 12 months of jolts data
+jolts_yr <- jolts %>% 
+  group_by(series) %>% 
+  slice(1:12)
+
+
+# dataframe for 10-year average of jolts data
+jolts_avg <- 
+  jolts %>% 
+  group_by(series) %>% 
+  arrange(desc(date), series) %>% 
+  slice(1:120)
+
+
+# labels for 12 month plots of jolts data
+labs <- jolts_yr %>% 
+  group_by(series) %>% 
+  ungroup() %>% 
+  slice(1:12) %>% 
+  select(date, periodName)
+
+# dataframe for series plot label values
+# dataframe for series plot label values
+series_labs <- data.frame(x = max(as.Date(jolts_yr$date)),#+ days(7),
+                          value = jolts %>% 
+                            filter(date == max(jolts$date)) %>%
+                            group_by(series) %>%
+                            slice(1) %>% ungroup() %>% select(value),
+                          series = jolts %>% group_by(series) %>% 
+                            slice(10) %>% ungroup() %>% select(series)) %>% 
+  mutate(series_lab = 
+           case_when(series == "ldr" ~  "Layoffs and\ndischarges",
+                     series == "ldl" ~  "Layoffs and\ndischarges",
+                     series == "qr"  ~ "Quits",
+                     series == "ql"  ~ "Quits",
+                     series == "tsr" ~ "Total\nseparations",
+                     series == "tsl" ~ "Total\nseparations",
+                     series == "hr" ~ "Hires",
+                     series == "hl" ~ "Hires",
+                     series == "jol" ~ "Job\nopenings",
+                     series == "jor" ~ "Job\nopenings")) 
+
+# dataframe for dummy data to build legend for linetypes
+blank <- data.frame(
+  date = rep(c(as.Date("2021-8-1"),
+               as.Date("2021-8-2"),
+               as.Date("2021-8-3")),2),
+  type = rep(c("rate", "mean"), 3),
+  value = c(2,1,4,3,6,5),
+  color = rep("bg_c", 3)
+)
+
+# dataframe for y axis grid lines and labels for rate for 10 year plots
+y_scale_seg <- 
+  data.frame(
+    x    = rep(as.Date(min(jolts$date)),5),
+    xend = rep(as.Date(max(jolts$date)),5),
+    y    = c(0,
+             plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*1,
+             plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*2,
+             plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*3,
+             plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*4
+    ),
+    yend = 
+      c(0,
+        plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*1,
+        plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*2,
+        plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*3,
+        plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*4
+      ),
+    labels = 
+      c("0%",
+        paste0(plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*1, "%"),
+        paste0(plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*2, "%"),
+        paste0(plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*3, "%"),
+        paste0(plyr::round_any(max(jolts$value[jolts$series == "tsr"])/4, accuracy = 1)*4, "%")
+      ))
+
+# y scale for 10-year levels
+y_scale_lev <- data.frame(
+  scale = 
+    c(0,
+      plyr::round_any(max(jolts$value[jolts$series == "tsl"]),accuracy = 1000)*.2,
+      plyr::round_any(max(jolts$value[jolts$series == "tsl"]),accuracy = 1000)*.4,
+      plyr::round_any(max(jolts$value[jolts$series == "tsl"]),accuracy = 1000)*.6,
+      plyr::round_any(max(jolts$value[jolts$series == "tsl"]),accuracy = 1000)*.8,
+      plyr::round_any(max(jolts$value[jolts$series == "tsl"]),accuracy = 1000)),
+  labels = 
+    c(0,
+      number(max(jolts$value[jolts$series == "tsl"]*.2), scale = .001, accuracy = .1, suffix = " M"),
+      number(max(jolts$value[jolts$series == "tsl"]*.4), scale = .001, accuracy = .1, suffix = " M"),
+      number(max(jolts$value[jolts$series == "tsl"]*.6), scale = .001, accuracy = .1, suffix = " M"),
+      number(max(jolts$value[jolts$series == "tsl"]*.8), scale = .001, accuracy = .1, suffix = " M"),
+      number(max(jolts$value[jolts$series == "tsl"]), scale = .001, accuracy = .1, suffix = " M"))
+)
+
+
+# y scale and labels for 12 month rate
+y_scale_seg_mo_rate <- data.frame(
+  x    = rep(as.Date(min(jolts_yr$date)),5),
+  xend = rep(as.Date(max(jolts_yr$date)),5),
+  y =
+    c(
+      0, 1,
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.5), 1),
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.75), 1),
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]), 1)),
+  yend =
+    c(
+      0, 1,
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.5), 1),
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.75), 1),
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]), 1)
+    ),
+  labels =
+    c("0%",
+      "1%",
+      paste0(plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.5), 1), "%"),
+      paste0(plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]*.75), 1), "%"),
+      paste0(plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jor"]), 1), "%")))
+
+
+# y scale for levels for 12 month plots
+y_scale_seg_mo_lev <- data.frame(
+  x    = rep(as.Date(min(jolts_yr$date)),5),
+  xend = rep(as.Date(max(jolts_yr$date)),5),
+  y = c(0,plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.25,
+        plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.5,
+        plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.75,
+        plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)),
+  yend =  
+    c(0,plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.25,
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.5,
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.75,
+      plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000))
+)
+```
+
+___
+
+##### The Job Openings and Labor Turnover Survey (JOLTS) uses data from a sample of approximately 21,000 businesses that cover nonagricultural industries in the public and private sectors of all 50 states and the District of Columbia to provide an indicator of labor demand and shortages at the national level. More information about the survey can be found at the Bureau of Labor Statistics [website.](https://www.bls.gov/jlt/) 
+
+##### This brief report details the levels and rates of job openings and total separations, as well as hires, quits, layoffs and discharges for 10-year and 12-month periods. Data can be downloaded as csv or Excel files using the Data tabs. The most recent month's data is preliminary. 
+
+___
+
+### **Job openings and Total separations** {.section}
+
+```{r, jor, tsr text block } 
+
+# text block for updated numbers on job opening and total separations. 
+
+jor_tsr <- paste0("The seasonally adjusted job openings rate ", 
+       
+       case_when(
+         
+         # if equal to last month
+         jor_current_mnth == jor_prev_mnth  ~ 
+           
+           paste0("remained at ", round(jor_current_mnth,2), "% in ", max_mnth_ch, 
+                  # above or below the 12 month average        
+                  if_else(round(jor_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "jor"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average")
+                  ),
+                  
+                  ", ", abs(round(jor_current_mnth - mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]), 1)),
+                  
+                  if_else(jor_current_mnth > mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; "),
+         
+         
+         
+         
+         # if less than last month
+         jor_prev_mnth > jor_current_mnth ~ 
+           paste0("fell ", round(jor_dif_lst_mnth ,2), "% in ", max_mnth_ch, " to ", 
+                  jor_current_mnth, "%",
+                  # above or below the 12 month average        
+                  if_else(round(jor_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "jor"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average")
+                  ),
+                  
+                  ", and ", abs(round(jor_current_mnth - mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]), 1)),
+                  
+                  if_else(jor_current_mnth > mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; "),
+         
+         
+         # if greater than last month        
+         jor_dif_lst_mnth < jor_current_mnth ~  
+           paste0("rose ", round(jor_dif_lst_mnth ,2), "% in ", max_mnth_ch, " to ", 
+                  jor_current_mnth, "%",
+                  # above or below the 12 month average        
+                  if_else(round(jor_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "jor"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "jor"]),1), "% 12-month average")
+                  ),
+                  
+                  ", and ", abs(round(jor_current_mnth - mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]), 1)),
+                  
+                  if_else(jor_current_mnth > mean(jolts$value[jolts$series == "jor" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; ")
+       ),
+       "there were ", number(jol_current_mnth, scale = .001, accuracy = .1, suffix = " million"), " job openings. ",
+       
+       "The total separations rate ", 
+       
+       case_when(
+         
+         # if equal to last month
+         tsr_current_mnth == tsr_prev_mnth  ~ 
+           
+           paste0("remained at ", round(tsr_current_mnth,2), "% in ", max_mnth_ch, 
+                  # above or below the 12 month average        
+                  if_else(round(tsr_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "tsr"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average")
+                  ),
+                  
+                  ", and ", abs(round(tsr_current_mnth - mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]), 2)),
+                  
+                  if_else(tsr_current_mnth > mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; "),
+         
+         # if less than last month
+         tsr_prev_mnth > tsr_current_mnth ~ 
+           paste0("fell ", round(tsr_dif_lst_mnth ,2), "% in ", max_mnth_ch, " to ", 
+                  tsr_current_mnth, "%",
+                  # above or below the 12 month average        
+                  if_else(round(tsr_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "tsr"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average")
+                  ),
+                  
+                  ", and ", abs(round(tsr_current_mnth - mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]), 2)),
+                  
+                  if_else(tsr_current_mnth > mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; "),
+         
+         
+         # if greater than last month        
+         tsr_dif_lst_mnth < tsr_current_mnth ~  
+           paste0("rose ", round(tsr_dif_lst_mnth ,2), "% in ", max_mnth_ch, " to ", 
+                  tsr_current_mnth, "%",
+                  # above or below the 12 month average        
+                  if_else(round(tsr_current_mnth,2) > mean(jolts_yr$value[jolts_yr$series == "tsr"]),
+                          paste0(", above the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average"),
+                          paste0(", below the ", round(mean(jolts_yr$value[jolts_yr$series == "tsr"]),1), "% 12-month average")
+                  ),
+                  
+                  ", and ", abs(round(tsr_current_mnth - mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]), 2)),
+                  
+                  if_else(tsr_current_mnth > mean(jolts$value[jolts$series == "tsr" & jolts$periodName == max_mnth_ch]),
+                          "% above ", "% below "), "the ten-year average rate for the month; ")
+       ),
+       "there were ", number(tsl_current_mnth, scale = .001, accuracy = .1, suffix = " million"), " total separations."
+)
+```
+
+##### `r jor_tsr` 
+
+```{r, set plot colors}
+# set colors for plot
+
+tsr_c <- "#8c510a"
+jo_c <-  "#01665e"
+hr_c <-  "#5ab4ac"
+qr_c <-  "#d8b365"  
+ldr_c <- "#f6e8c3"
+bg_c <-  "#fbf9f6" # background color
+
+#  colors for series rates and levels
+series_cols <- c(tsr  = tsr_c,
+                 tsl  = tsr_c,
+                 qr   = qr_c, 
+                 ql   = qr_c,
+                 ldr  = ldr_c,
+                 ldl  = ldr_c,
+                 hr   = hr_c,
+                 hl   = hr_c,
+                 bg_c = bg_c,
+                 jol  = jo_c,
+                 jor  = jo_c)
+```
+
+```{r, set custom theme}
+# background color 
+bg_c <-  "#fbf9f6" 
+
+# theme
+t_theme <- function(base_size = 10){
+  
+  theme_classic() %+replace%
+    
+    theme(
+      axis.title = element_blank(),
+      axis.text.x   = element_text(rel(x = 3.75), color = "#636363"),
+      axis.text.y   = element_text(rel(x = 3.75), color = "#636363",
+                                   margin=margin(0,-20,0,0)),
+      axis.line = element_blank(),
+      axis.ticks.x = element_line(color = "#636363"),
+      axis.ticks.y = element_blank(),
+      legend.background = element_rect(fill = NA, color = NA),
+      legend.key.width= unit(1.25, 'cm'),
+      legend.position = c(.15,.95),
+      legend.text  = element_text(size = 9),
+      legend.title = element_blank(),
+      legend.key = element_blank(),
+      plot.title.position = "plot",
+      plot.margin = margin(.1,.25,.1,.25, "in"),
+      plot.background = element_rect(fill  = bg_c, color = NA),
+      panel.background = element_rect(fill = bg_c, color = NA),
+      plot.title = element_textbox(
+        family = "serif", 
+        size = rel(x = 1.8),
+        width = unit(1, "npc"),
+        padding = margin(4, 4, 1, 4),
+        margin = margin(8, 0, 0, 0),
+        lineheight = 1
+      ),
+      plot.subtitle = element_textbox(
+        family = "sans", 
+        size = rel(x = 1.1),
+        width = unit(1, "npc"),
+        padding = margin(4, 4, 4, 4),
+        margin  = margin(0, 0, 4, 0),
+        lineheight = 1
+      ),
+      plot.caption = element_text(margin = margin(10, 0, 0, 0), hjust = 1, size = rel(x = .95))
+    )
+}
+
+```
+
+```{r, set caption}
+# caption for plots
+caption <- paste0("Data:www.bls.gov/jlt ", expression(" *"), max_mnth_ch, " 2023 data is preliminary.\nData currrent as of ", Sys.Date())
+```
+
+<br>
+
+##### **Ten year job openings and separations**
+
+## {.tabset}
+
+### Rate
+
+```{r, 10-year rate plot, fig.width=11, fig.height = 7 }
+
+ggplot()+
+  
+  # add lines for each series: hires, quits, layoffs and discharges
+  geom_line(data = jolts %>% filter(series == "tsr"|
+                                      series == "jor"),
+            aes(x = as.Date(date), value, group = series, color = series),
+            size = 1, show.legend = F)+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data = y_scale_seg,
+               aes(x = x, xend = xend, y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series == "tsr"|
+                                            series == "jor"),
+            aes(x = x + months(1),           
+                y = value, label = series_lab),
+            size = rel(x = 3), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  # add labels for years and extend xaxis to accomodate directly labeling lines  
+  scale_x_date(date_breaks = "1 year",
+               labels = date_format("%Y"),
+               limits = c(min(jolts$date), max(jolts$date)+months(4)),
+  )+
+  
+  # customize colors  
+  scale_color_manual(values = series_cols)+
+  
+  # custom y scale  
+  scale_y_continuous(
+    limits = c(0, plyr::round_any(max(jolts$value[jolts$series != "jol" &
+                                                    jolts$series != "ql"  &
+                                                    jolts$series != "tsl" &
+                                                    jolts$series != "hl"  &
+                                                    jolts$series != "ldl"]), 
+                                  accuracy = 1)),
+    breaks = c(0, y_scale_seg$y),
+    labels = c("0%", y_scale_seg$labels))+
+  
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted rate of job openings and total separations from ", 
+                   year(min(jolts$date)),
+                   " to ", 
+                   month(max(jolts$date), label = T, abbr = F), " ", year(max(jolts$date)), ".^*^"),
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    
+    caption = caption 
+    )+
+  
+  # set theme, make adjustments    
+  t_theme()
+```
+
+### Levels 
+
+```{r, 10-year levels plot, fig.width=11, fig.height = 7 }
+ 
+ggplot()+
+  
+  # add lines for each series: hires, quits, layoffs and discharges
+  geom_line(data = jolts %>% 
+              filter(series == "tsl"| 
+                       series == "jol"),
+            aes(x = date, value, group = series, color = series),
+            size = 1, show.legend = F)+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data = y_scale_lev,# %>% filter(scale >1),
+               aes(x = as.Date(min(jolts$date)), xend = as.Date(max(jolts$date)), 
+                   y = scale, yend = scale), color = "lightgray",
+               linetype = "dotted")+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% 
+              filter(series == "tsl"| 
+                       series == "jol"),
+            aes(x = x + months(1),            
+                y = value, label = series_lab),
+            size = rel(x = 3), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  scale_x_date(date_breaks = "1 year",
+               labels = date_format("%Y"),
+               limits = c(min(jolts$date), max(jolts$date)+months(4)),
+  )+
+  
+  # customize colors  
+  scale_color_manual(values = series_cols)+
+  
+  #  custom y scale  
+  scale_y_continuous(
+    limits = c(0, max(jolts$value[jolts$series == "tsl"])),
+    breaks = y_scale_lev$scale,
+    labels = y_scale_lev$labels)+
+  
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted levels of job openings and total separations from ", 
+                   year(min(jolts$date)),
+                   " to ", 
+                   month(max(jolts$date), label = T, abbr = F), " ", year(max(jolts$date)), ".^*^"),
+    
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    
+    caption = caption
+  )+
+  
+  # set theme, make adjustments    
+  t_theme()
+  
+```
+
+### Data
+
+```{r 10-year job openings and total separation data}
+datatable(jolts %>% 
+  select(periodName, year, series, value) %>% 
+  mutate(date = paste0(periodName, " ", year)) %>% 
+  select(-periodName, - year) %>% 
+  pivot_wider(names_from = series,
+              values_from = c("value")) %>% 
+  select(date, jol, jor, tsl, tsr) %>% 
+  mutate(
+    jor = .01*jor, 
+    tsr = .01*tsr, 
+    jol = jol*1000,
+    tsl = tsl*1000,
+  ),
+          colnames = c("Date", "Job openings\nlevel", "Job openings\nrate", "Total separations\nlevel", "Total separations\nrate"),
+          caption = htmltools::tags$caption(
+            style = 'caption-side: top; text-align: left;',
+            "Bureau of Labor Statistics Job Openings and Labor Turnover Survey: levels and rates of job openings and total separations in the last 10 years", style = "color:black", size = 14),
+          rownames=FALSE, 
+          filter = "top", 
+          extensions = c('Buttons', 'FixedColumns'),
+          options = list(pageLength=12, 
+                         scrollX=T,
+                         dom = 'Bfrtip',
+                         scrollY = '250px',
+                         buttons = c('csv', 'excel')
+                         #columnDefs = list(list(className = 'dt-center', targets = 1:4))
+          )) %>% 
+ formatPercentage(c("jor", "tsr"), digits = 1, 
+                  zero.print = 0) %>% 
+  formatRound(c("jol", "tsl"), digits = 0, interval = 3, mark = ",")
+```
+
+
+## {-}
+
+<br>
+
+##### **Twelve month job openings and separations**
+
+
+## {.tabset}
+
+### Rate
+
+```{r, 12 month rate jo, ts plot, fig.width=11, fig.height=6.5 }
+
+ggplot()+
+  
+  # add dummy data in order to create simple legend for dashed/solid lines
+  geom_line(data = blank,
+            aes(x = date, y = value, group = type, color = type, linetype = type))+
+  
+  # scale for linetypes
+  scale_linetype_manual(values = c("rate" = "solid",
+                                   "mean" = "dashed"),
+                        labels = c(
+                          "10-year monthly average",
+                          "Past 12 months"),
+                        guide_legend(title = ""))+
+  
+  # remove guide for color
+  guides(color = "none")+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data  = y_scale_seg_mo_rate,
+               aes(x = x, xend = xend, 
+                   y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # add lines for each series
+  geom_line(data = jolts_yr %>% filter(
+    # series == "qr"|
+    # series == "ldr"|
+    # series == "hr"|
+    series == "jor"|
+      series == "tsr"),
+    aes(date, value, group = series, color = series),
+    size = 1.5, show.legend = F)+
+  
+  # add points for each series
+  # geom_point(
+  #   data = jolts_yr %>% filter(
+  #       # series == "qr"|
+  #       # series == "ldr"|
+  #       # series == "hr"|
+  #       series == "jor"|
+  #       series == "tsr"),
+  #   aes(date, value, group = series, color = series),
+  #   size = 2.75, show.legend = F)+
+
+# add dashed lines for each series average rate
+geom_line(data = jolts %>% 
+            group_by(series) %>% 
+            arrange(desc(date), series) %>% 
+            slice(1:120) %>% 
+            filter(
+              # series == "qr"|
+              #   series == "ldr"|
+              #   series == "hr"|
+              series == "jor"|
+                series == "tsr"),
+          aes(date, mn_rate, group = series, color = series),
+          linetype = "dashed", size = .5,
+          show.legend = F)+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series == "tsr" |
+                                            series == "jor"),
+            aes(x = x + weeks(1), y = value, label = series_lab),
+            size = rel(x = 3.25), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  
+  scale_color_manual(values = series_cols)+
+  
+  scale_y_continuous(limits = c(0, max(jolts$value[jolts$series == "jor"])+.5),
+                     breaks = c(0, y_scale_seg_mo_rate$y),
+                     labels = c("", y_scale_seg_mo_rate$labels))+
+  
+  scale_x_date(date_breaks = "1 month",
+               labels = date_format("%b"),
+               limits = c(min(jolts_yr$date), max(jolts_yr$date)+months(1)),
+  )+
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted rate of monthly job openings and total separations for the last 12 months, and the 10-year monthly average.^*^"),
+    
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    
+    caption = caption
+  )+
+  
+  
+  # set theme, make adjustments
+  t_theme()
+
+```
+
+### Levels
+```{r, 12 month levels jo, ts plot, fig.width=11, fig.height=6.5 }
+
+ggplot()+
+  
+  # add dummy data in order to create simple legend for dashed/solid lines
+  geom_line(data = blank,
+            aes(x = date+years(1), y = 1000, group = type, linetype = type, color = color))+
+  
+  
+  # scale for linetypes
+  scale_linetype_manual(values = c("rate" = "solid",
+                                   "mean" = "dashed"),
+                        labels = c(
+                          "10-year monthly average",
+                          "Past 12 months"),
+                        guide_legend(title = ""))+
+  
+  # remove guide for color
+  guides(color = "none")+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data  = y_scale_seg_mo_lev,
+               aes(x = x, xend = xend, 
+                   y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # add lines for each series
+  geom_line(data = jolts_yr %>% 
+              filter(
+                series == "tsl"|
+                  series == "jol"),
+            aes(date, value, group = series, color = series),
+            size = 1.5, show.legend = F)+
+  
+  # add points for each series
+  # geom_point(data = jolts_yr %>% filter(
+  #   series == "tsl"|
+  #     series == "jol"),
+  #   aes(date, value, group = series, color = series),
+  #   size = 2.75, show.legend = F)+
+  
+  # add dashed lines for each series average rate
+  geom_line(data =  jolts %>% 
+              group_by(series) %>% 
+              arrange(desc(date), series) %>% 
+              slice(1:120) %>% 
+              filter(
+                series == "tsl"|
+                  series == "jol"),
+            aes(date, mn_rate, group = series, color = series),
+            linetype = "dashed", size = .5,
+            show.legend = F)+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% 
+              filter(
+                series == "tsl"|
+                  series == "jol"),
+            aes(x = x + weeks(1), y = value, label = series_lab),
+            size = rel(x = 3.25), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  
+  scale_color_manual(values = series_cols)+
+  
+  scale_y_continuous(limits = c(0, max(jolts_yr$value)+1000),
+                     breaks = 
+                       c(0,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.25,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.5,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.75,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)),
+                     labels =  
+                       c("0",
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.25), scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.5),  scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.75), scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]),     scale = .001, accuracy = .1, suffix = " M")))+
+  
+  #scales::label_number(big.mark = ","))+ 
+  
+  scale_x_date(date_breaks = "1 month",
+               labels = date_format("%b"),
+               limits = c(min(jolts_yr$date), max(jolts_yr$date)+months(1)),
+  )+
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted levels of monthly job openings and total separations for the last 12 months, and the 10-year monthly average.^*^"),
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    
+    caption = caption
+  )+
+  
+  # set theme, make adjustments    
+  t_theme()
+
+```
+
+### Data
+
+
+```{r, 12 month job openings and total sep data}
+datatable(jolts_yr %>% 
+            select(periodName, year, series, value) %>% 
+            mutate(date = paste0(periodName, " ", year)) %>% 
+            select(-periodName, - year) %>% 
+            pivot_wider(names_from = series,
+                        values_from = c("value")) %>% 
+            select(date, jol, jor, tsl, tsr) %>% 
+            mutate(
+              jor = .01*jor, 
+              tsr = .01*tsr,
+              jol = jol*1000,
+              tsl = tsl*1000
+            ),
+          colnames = c("Date", "Job openings\nlevel", "Job openings\nrate", "Total separations\nlevel", "Total separations\nrate"),
+          caption = htmltools::tags$caption(
+            style = 'caption-side: top; text-align: left;',
+            "Bureau of Labor Statistics Job Openings and Labor Turnover Survey: levels and rates of job openings and total separations in the last 12 months.", style = "color:black", size = 14),
+          rownames=FALSE, 
+          filter = "top", 
+          extensions = c('Buttons', 'FixedColumns'),
+          options = list(pageLength=12, 
+                         scrollX=T,
+                         dom = 'Bfrtip',
+                         scrollY = '250px',
+                         buttons = c('csv', 'excel')
+                         #columnDefs = list(list(className = 'dt-center', targets = 1:4))
+          )) %>% 
+  formatPercentage(c("jor", "tsr"), digits = 1, 
+                   zero.print = 0) %>% 
+  formatRound(c("jol", "tsl"), digits = 0, interval = 3, mark = ",")
+
+```
+
+## {-}
+
+<br>
+
+### **Job openings, hires, quits, layoffs and discharges** {.section}
+
+```{r, text block for hires, quits, layoffs and discharges}
+
+# **Job openings, hires, quits, layoffs and discharges** text from index.Rmd
+
+hqld <- paste0("The hires rate ", 
+       
+       case_when(
+         hr_prev_mnth == hr_current_mnth ~ paste0("remained flat at ",  hr_current_mnth, "% in ", max_mnth_ch, ","),
+         
+         hr_prev_mnth > hr_current_mnth ~  paste0("fell ", round(abs(hr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+         
+         hr_prev_mnth < hr_current_mnth ~  paste0("rose ", round(abs(hr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+       ),
+       
+       if_else(hr_current_mnth <= min(jolts_yr$value[jolts_yr$series == "hr"]), 
+               
+               " the lowest rate in 12 months", ""), 
+       
+       if_else(hr_current_mnth >= max(jolts_yr$value[jolts_yr$series == "hr"]), " the highest rate in 12 months", ""), 
+       
+       " and ", abs(round(hr_current_mnth - mean(jolts$value[jolts$series == "hr" & jolts$periodName == max_mnth_ch]), 2)),
+       
+       if_else(hr_current_mnth > mean(jolts$value[jolts$series == "hr" & jolts$periodName == max_mnth_ch]),"% above ", "% below "), 
+       
+       "the ten-year average; there were ", number(hl_current_mnth, scale = .001, accuracy = .1, suffix = " million"),  " hires. The quits rate ", 
+       
+       # quits
+       
+       case_when(
+         qr_prev_mnth == qr_current_mnth ~ paste0("remained flat at ",  qr_current_mnth, "% in ", max_mnth_ch, ","),
+         
+         qr_prev_mnth > qr_current_mnth ~  paste0("fell ", round(abs(qr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+         
+         qr_prev_mnth < qr_current_mnth ~  paste0("rose ", round(abs(qr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+       ),
+       
+       if_else(qr_current_mnth <= min(jolts_yr$value[jolts_yr$series == "qr"]), 
+               
+               " the lowest rate in 12 months", ""), 
+       
+       if_else(qr_current_mnth >= max(jolts_yr$value[jolts_yr$series == "qr"]), " the highest rate in 12 months", ""), 
+       
+       " and ", abs(round(qr_current_mnth - mean(jolts$value[jolts$series == "qr" & jolts$periodName == max_mnth_ch]), 2)),
+       
+       if_else(qr_current_mnth > mean(jolts$value[jolts$series == "qr" & jolts$periodName == max_mnth_ch]),"% above ", "% below "), 
+       
+       "the ten-year average; there were ", number(ql_current_mnth, scale = .001, accuracy = .1, suffix = " million"),  " quits.",
+       
+       # layoffs and discharges
+       
+       " The layoffs and discharges rate ", 
+       
+       case_when(
+         ldr_prev_mnth == ldr_current_mnth ~ paste0("remained flat at ",  ldr_current_mnth, "% in ", max_mnth_ch, ","),
+         
+         ldr_prev_mnth > ldr_current_mnth ~  paste0("fell ", round(abs(ldr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+         
+         ldr_prev_mnth < ldr_current_mnth ~  paste0("rose ", round(abs(ldr_dif_lst_mnth),2), "% in ", max_mnth_ch, ","),
+       ),
+       
+       if_else(ldr_current_mnth <= min(jolts_yr$value[jolts_yr$series == "ldr"]), 
+               
+               " the lowest rate in 12 months", ""), 
+       
+       if_else(ldr_current_mnth >= max(jolts_yr$value[jolts_yr$series == "ldr"]), " the highest rate in 12 months", ""), 
+       
+       " and ", abs(round(ldr_current_mnth - mean(jolts$value[jolts$series == "ldr" & jolts$periodName == max_mnth_ch]), 2)),
+       
+       if_else(ldr_current_mnth > mean(jolts$value[jolts$series == "ldr" & jolts$periodName == max_mnth_ch]),"% above ", "% below "), 
+       
+       "the ten-year average; there were ", number(ldl_current_mnth, scale = .001, accuracy = .1, suffix = " million"),  " layoffs and discharges."
+)
+
+```
+
+
+##### `r hqld`
+
+<br>
+
+##### **Ten year job openings, hires, quits, layoffs and discharges**
+
+## {.tabset}
+
+### Rate
+
+```{r, 10 year rate hires, quits, ldl, fig.width=11, fig.height=6.5}
+
+ggplot()+
+  
+  # add lines for each series: hires, quits, layoffs and discharges
+  geom_line(data = jolts %>% filter(series == "qr"|
+                                      series == "ldr"|
+                                      series == "hr"|
+                                      series == "jor"),
+            aes(x = as.Date(date), value, group = series, color = series),
+            size = 1, show.legend = F)+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data = y_scale_seg,
+               aes(x = x, xend = xend, y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series == "qr"|
+                                            series == "ldr"|
+                                            series == "hr"|
+                                            series == "jor"),
+            aes(x = x + months(1),           
+                y = value, label = series_lab),
+            size = rel(x = 3), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  # add labels for years and extend xaxis to accomodate directly labeling lines  
+  scale_x_date(date_breaks = "1 year",
+               labels = date_format("%Y"),
+               limits = c(min(jolts$date), max(jolts$date)+months(4)),
+  )+
+  
+  # customize colors  
+  scale_color_manual(values = series_cols)+
+  
+  # custom y scale  
+  scale_y_continuous(
+    limits = c(0, plyr::round_any(max(jolts$value[jolts$series   != "jol" &
+                                                    jolts$series != "ql"  &
+                                                    jolts$series != "tsl" &
+                                                    jolts$series != "hl"  &
+                                                    jolts$series != "ldl" &
+                                                    jolts$series != "tsr"
+    ]), accuracy = 1)),
+    breaks = c(y_scale_seg$y),
+    labels = c(y_scale_seg$labels))+
+  
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted rate of job openings, hires, quits, layoffs and discharges from ", 
+                   year(min(jolts$date)),
+                   " to ", 
+                   month(max(jolts$date), label = T, abbr = F), " ", 
+                   year(max(jolts$date)), ".*"),
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Hires*: all additions to the payroll; *quits*:
+    employees who left voluntarily, excluding retirements and transfers; 
+    *layoffs and discharges*: involuntary separations initiated by the employer.",
+    
+    caption = caption
+  )+
+  
+  # set theme, make adjustments    
+  t_theme()+
+  
+  # extra clearance needed between title, subtitle
+  theme(
+    plot.subtitle = element_textbox(
+      family = "sans", 
+      #size = rel(x = 1),
+      width = unit(1, "npc"),
+      padding = margin(4, 4, 4, 4),
+      margin  = margin(5, 0, 4, 0),
+      lineheight = 1
+    )
+  )
+
+```
+
+### Level
+
+```{r, 10-year level hires, quits, ldl, fig.width=11, fig.height=6.5}
+
+ggplot()+
+  
+  # add lines for each series: hires, quits, layoffs and discharges
+  geom_line(data = jolts %>% filter(series == "ql"|
+                                      series == "ldl"|
+                                      series == "hl"| 
+                                      series == "jol"),
+            aes(x = date, value, group = series, color = series),
+            size = 1, show.legend = F)+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data = y_scale_lev %>% filter(scale >1),
+               aes(x = as.Date(min(jolts$date)), xend = as.Date(max(jolts$date)), 
+                   y = scale, yend = scale), color = "lightgray",
+               linetype = "dotted")+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series == "ql"|
+                                            series == "ldl"|
+                                            series == "hl"| 
+                                            series == "jol"),
+            aes(x = x + months(1),            #as.POSIXct(ymd("2023-7-5")), 
+                y = value, label = series_lab),
+            size = rel(x = 3), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  # add labels for years and extend xaxis to accomodate directly labeling lines  
+  scale_x_date(date_breaks = "1 year",
+               labels = date_format("%Y"),
+               limits = c(min(jolts$date), max(jolts$date)+months(4)),
+  )+
+  
+  # customize colors  
+  scale_color_manual(values = series_cols)+
+  
+  #  custom y scale  
+  scale_y_continuous(
+    limits = c(0, max(jolts$value[jolts$series != "tsl"])),
+    breaks = y_scale_lev$scale,
+    labels = y_scale_lev$labels)+
+  
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted levels of job openings, hires, quits, layoffs and discharges from ", 
+                   year(min(jolts$date)),
+                   " to ", 
+                   month(max(jolts$date), label = T, abbr = F), " ",
+                   year(max(jolts$date)), ".*"),
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Hires*: all additions to the payroll; *quits*:
+    employees who left voluntarily, excluding retirements and transfers; 
+    *layoffs and discharges*: involuntary separations initiated by the employer.",
+    
+    caption = caption
+  )+
+  
+  # set theme, make adjustments    
+  t_theme()+
+  
+  # extra clearance needed between title, subtitle
+  theme(
+    plot.subtitle = element_textbox(
+      family = "sans", 
+      #size = rel(x = 1),
+      width = unit(1, "npc"),
+      padding = margin(4, 4, 4, 4),
+      margin  = margin(5, 0, 4, 0),
+      lineheight = 1
+    )
+  )
+
+```
+
+
+### Data
+
+```{r, data, 10 year hires, quits, ldl}
+datatable(jolts%>% 
+            select(periodName, year, series, value) %>% 
+            mutate(date = paste0(periodName, " ", year)) %>% 
+            select(-periodName, - year) %>% 
+            pivot_wider(names_from = series,
+                        values_from = c("value")) %>%
+            select(date, hl, hr, ql, qr, ldl, ldr, jol, jor) %>% 
+            # adjust rate columns for DT percent formatting
+            mutate(
+                  hl = hl*1000,
+                  hr = hr*.01,
+                  ql = ql*1000,
+                  qr = qr*.01,
+                  ldl = ldl*1000,
+                  ldr = ldr*.01,
+                  jol = jol*1000,
+                  jor = jor*.01),
+          colnames = c("Date","Hires\nlevel", "Hires\nrate", "Quit\nlevel", "Quit\nrate", "Layoffs and discharges\nlevel", "Layoffs and discharges\nrate",  "Job openings\nlevel", "Job openings\nrate" ),
+          caption = htmltools::tags$caption(
+            style = 'caption-side: top; text-align: left;',
+            "Bureau of Labor Statistics Job Openings and Labor Turnover Survey: levels and rates of layoffs and discharges, quits, hires and job openings in the last 10 years.", style = "color:black", size = 14),
+          rownames=FALSE, 
+          filter = "top", 
+          extensions = c('Buttons', 'FixedColumns'),
+          options = list(pageLength=12, 
+                         scrollX=T,
+                         dom = 'Bfrtip',
+                         scrollY = '250px',
+                         buttons = c('csv', 'excel'),
+                         columnDefs = list(list(className = 'dt-center', targets = 1:8))
+          )) %>% 
+  formatPercentage(c("hr", "qr","ldr", "jor"), digits = 1, 
+                   zero.print = 0) %>% 
+  formatRound(c("hl", "ql", "ldl", "jol"), digits = 0, interval = 3, mark = ",")
+```
+
+## {-}
+
+##### **Twelve month job openings, hires, quits, layoffs and discharges**
+
+## {.tabset}
+
+### Rate
+
+```{r,  12 month rate hires, quits, ldl plot, fig.width=11, fig.height=6.5}
+
+ggplot()+
+  
+  # add dummy data in order to create simple legend for dashed/solid lines
+  geom_line(data = blank,
+            aes(x = date, y = value, group = type, color = type, linetype = type))+
+  
+  # scale for linetypes
+  scale_linetype_manual(values = c("rate" = "solid",
+                                   "mean" = "dashed"),
+                        labels = c(
+                          "10-year monthly average",
+                          "Past 12 months"),
+                        guide_legend(title = ""))+
+  
+  # remove guide for color
+  guides(color = "none")+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data  = y_scale_seg_mo_rate,
+               aes(x = x, xend = xend, 
+                   y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # add lines for each series
+  geom_line(data = jolts_yr %>% filter(
+    series == "qr"|
+      series == "ldr"|
+      series == "hr"|
+      series == "jor"),
+    aes(date, value, group = series, color = series),
+    size = 1.5, show.legend = F)+
+  
+  # add points for each series
+  # geom_point(
+  #   data = jolts_yr %>% filter(
+  #     series == "qr"|
+  #       series == "ldr"|
+  #       series == "hr"|
+  #       series == "jor"),
+  #   aes(date, value, group = series, color = series),
+  #   size = 2.75, show.legend = F)+
+  
+  # add dashed lines for each series average rate
+  geom_line(data = jolts %>% 
+              group_by(series) %>% 
+              arrange(desc(date), series) %>% 
+              slice(1:120) %>% 
+              filter(
+                series == "qr"|
+                  series == "ldr"|
+                  series == "hr"|
+                  series == "jor"),
+            aes(date, mn_rate, group = series, color = series),
+            linetype = "dashed", size = .5,
+            show.legend = F)+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series != "tsl" & series != "tsr"),
+            aes(x = x + weeks(1), y = value, label = series_lab),
+            size = rel(x = 3.25), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  
+  scale_color_manual(values = series_cols)+
+  
+  scale_y_continuous(limits = c(0, max(jolts$value[jolts$series == "jor"])+.5),
+                     breaks = y_scale_seg_mo_rate$y,
+                     labels = y_scale_seg_mo_rate$labels)+
+  
+  scale_x_date(date_breaks = "1 month",
+               labels = date_format("%b"),
+               limits = c(min(jolts_yr$date), max(jolts_yr$date)+months(1)),
+  )+
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted monthly rate of job openings, hires, quits, layoffs and discharges for the last 12 months, and the 10-year year monthly average.^*^"), 
+    
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Hires*: all additions to the payroll; *quits*:
+    employees who left voluntarily, excluding retirements and transfers; 
+    *layoffs and discharges*: involuntary separations initiated by the employer.",
+    
+    caption = caption
+  )+
+  
+  # set theme, make adjustments    
+  t_theme()
+
+```
+
+### Level
+
+```{r, 12 month level hires, quits, ldl plot, fig.width=11, fig.height=6.5}
+
+ggplot()+
+  
+  # add dummy data in order to create simple legend for dashed/solid lines
+  geom_line(data = blank,
+            aes(x = date+years(1), y = 1000, group = type, linetype = type, color = color))+
+  
+  
+  # scale for linetypes
+  scale_linetype_manual(values = c("rate" = "solid",
+                                   "mean" = "dashed"),
+                        labels = c(
+                          "10-year monthly average",
+                          "Past 12 months"),
+                        guide_legend(title = ""))+
+  
+  # remove guide for color
+  guides(color = "none")+
+  
+  # add dotted lines for axis lines that stop with data (don't extend over labels like gridlines)
+  geom_segment(data  = y_scale_seg_mo_lev,
+               aes(x = x, xend = xend, 
+                   y = y, yend = yend), color = "lightgray", 
+               linetype = "dotted")+
+  
+  # add lines for each series
+  geom_line(data = jolts_yr %>% filter(
+    series == "ql"|
+      series == "ldl"|
+      series == "hl"|
+      series == "jol"),
+    aes(date, value, group = series, color = series),
+    size = 1.5, show.legend = F)+
+  
+  # add points for each series
+  # geom_point(data = jolts_yr %>% filter(
+  #   series == "ql"|
+  #     series == "ldl"|
+  #     series == "hl"|
+  #     series == "jol"),
+  #   aes(date, value, group = series, color = series),
+  #   size = 2.75, show.legend = F)+
+  
+  # add dashed lines for each series average rate
+  geom_line(data =  jolts %>% 
+              group_by(series) %>% 
+              arrange(desc(date), series) %>% 
+              slice(1:120) %>% 
+              filter(series == "ql"|
+                       series == "ldl"|
+                       series == "hl"|
+                       series == "jol"),
+            aes(date, mn_rate, group = series, color = series),
+            linetype = "dashed", size = .5,
+            show.legend = F)+
+  
+  # label series lines directly
+  geom_text(data = series_labs %>% filter(series == "ql"|
+                                            series == "ldl"|
+                                            series == "hl"|
+                                            series == "jol"),
+            aes(x = x + weeks(1), y = value, label = series_lab),
+            size = rel(x = 3.25), 
+            hjust = 0,
+            show.legend = F, 
+            color = "#636363", 
+            lineheight = 1
+  )+
+  
+  
+  scale_color_manual(values = series_cols)+
+  
+  scale_y_continuous(limits = c(0, max(jolts_yr$value)+1000),
+                     breaks = 
+                       c(0,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.25,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.5,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)*.75,
+                         plyr::round_any(max(jolts_yr$value[jolts_yr$series == "jol"]), 1000)),
+                     labels =  
+                       c("0",
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.25), scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.5),  scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]*.75), scale = .001, accuracy = .1, suffix = " M"),
+                         number(max(jolts_yr$value[jolts_yr$series == "jol"]),     scale = .001, accuracy = .1, suffix = " M")))+
+  
+
+  
+  scale_x_date(date_breaks = "1 month",
+               labels = date_format("%b"),
+               limits = c(min(jolts_yr$date), max(jolts_yr$date)+months(1)),
+  )+
+  # add titles, captions    
+  labs(
+    title = paste0("Seasonally adjusted monthly level of job openings, hires, quits, layoffs and discharges for the last 12 months, and the 10-year year monthly average.^*^"), 
+                  
+    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Hires*: all additions to the payroll; *quits*:
+    employees who left voluntarily, excluding retirements and transfers; 
+    *layoffs and discharges*: involuntary separations initiated by the employer.",
+    
+    caption = caption
+  )+
+  
+  # set theme
+  t_theme()
+
+```
+
+### Data
+
+```{r data 12 month hires, quits, ldl}
+datatable(jolts_yr %>% 
+  select(periodName, year, series, value) %>% 
+  mutate(date = paste0(periodName, " ", year)) %>% 
+  select(-periodName, - year) %>% 
+  pivot_wider(names_from = series,
+              values_from = c("value")) %>% 
+  select(date, hl, hr, ldl, ldr, ql, qr, jol, jor) %>% 
+  mutate(
+    hr = .01*hr,
+    hl = 1000*hl,
+    ldr = .01*ldr,
+    ldl = 1000*ldl,
+    qr = .01*qr,
+    ql = 1000*ql,
+    jor = .01*jor,
+    jol = 1000*jol),
+          colnames = c("Date", "Hires\nlevel", "Hires\nrate", "Layoffs and discharges\nlevel", "Layoffs and discharges\nrate", "Quit\nlevel", "Quit\nrate",  "Job openings\nlevel","Job openings\nrate"),
+          caption = htmltools::tags$caption(
+            style = 'caption-side: top; text-align: left;',
+            "Bureau of Labor Statistics Job Openings and Labor Turnover Survey: levels and rates of hires, layoffs and discharges, quits and job openings in the last 12 months.", style = "color:black", size = 14),
+          rownames=FALSE, 
+          filter = "top", 
+          extensions = c('Buttons', 'FixedColumns'),
+          options = list(pageLength=12, 
+                         scrollX=T,
+                         dom = 'Bfrtip',
+                         scrollY = '250px',
+                         buttons = c('csv', 'excel'),
+                         columnDefs = list(list(className = 'dt-center', targets = 1:8))
+          )) %>% 
+ formatPercentage(c("hr", "ldr", "qr", "jor"), digits = 1, 
+                  zero.print = 0) %>% 
+  formatRound(c("hl", "ldl", "ql", "jol"), digits = 0, interval = 3, mark = ",")
+```
+
+## {-}
+
+___
+
+___
+
+### Bureau of Labor Statistics [definitions](https://www.bls.gov/jlt/jltdef.htm) {.section}
+
+<br>
+
+#### **Employment** {.list-headings}
+
+##### Includes all persons on the payroll who worked during or received pay for the pay period that includes the 12th of the month:
+
+* Full-time and part-time employees
+* Permanent, short-term, and seasonal employees
+* Salaried and hourly workers
+* Employees on paid vacation or other paid leave
+
+##### Does not include: 
+
+* Proprietors and partners of unincorporated businesses
+* Unpaid family workers
+* Employees on strike for the entire pay period
+* Employees on leave without pay for the entire pay period
+* Employees of temporary help agencies, employee leasing companies, outside contractors, or consultants. Employees of 
+    these types of firms are counted by establishments employing them, not at the site where the work is performed.
+
+___
+
+#### **Job Openings:** {.list-headings}
+
+##### Includes all positions that are open (not filled) on the last business day of the month. A job is "open" only if it meets all three of the following conditions:
+
+* 1.) A specific position exists and there is work available for that position. The position can be full-time or part-time, and it can be permanent, short-term, or seasonal.
+
+* 2.) The job could start within 30 days, whether or not the establishment finds a suitable candidate during that time.
+    
+* 3.) There is active recruiting for workers from outside the establishment location that has the opening.
+
+##### Active recruiting means the establishment is taking steps to fill a position. It may include advertising in newspapers, on television, or on radio; posting Internet notices; posting "help wanted" signs; networking with colleagues or making "word of mouth" announcements; accepting applications; interviewing candidates; contacting employment agencies; or soliciting employees at job fairs, state or local employment offices, or similar sources.
+
+##### Job openings do not include:
+
+* Positions open only to internal transfers, promotions or demotions, or recall from layoffs
+* Openings for positions with start dates more than 30 days in the future
+* Positions for which employees have been hired, but the employees have not yet reported for work
+* Positions to be filled by employees of temporary help agencies, employee leasing companies, outside contractors, or
+  consultants. A separate form is used to collect information from temporary help/employee leasing firms for these     
+  employees.
+
+##### The job openings rate is computed by dividing the number of job openings by the sum of employment and job openings—that is, all filled and unfilled jobs—and multiplying that quotient by 100.
+
+___
+ 
+#### **Hires:** {.list-headings}
+
+##### Includes all additions to the payroll during the month:
+
+* Newly hired and rehired employees
+* Permanent, short-term, and seasonal employees
+* Full-time and part-time employees
+* On-call or intermittent employees who returned to work after having been formally separated
+* Workers who were hired and separated during the month
+* Transfers from other locations
+* Employees who were recalled to a job at the sampled establishment following a formal layoff lasting more than 7 days
+
+##### Does not incude: 
+
+* Transfers or promotions within the sampled establishment
+* Employees returning from strikes
+* Employees of temporary help agencies, employee leasing companies, outside contractors, or consultants working at the 
+  sampled establishment. A separate form is used to collect information from temporary help and employee leasing firms     for these employees.
+
+##### The hires rate is computed by dividing the number of hires by employment and multiplying that quotient by 100.  
+
+___
+ 
+#### **Separations** {.list-headings}
+
+##### Includes all employees separated from the payroll during the month:
+
+
+* Quits: Employees who left voluntarily. Exception: retirements or transfers to other locations are reported with Other 
+  Separations.
+  
+* Layoffs & Discharges: Involuntary separations initiated by the employer, including:
+        * Layoffs with no intent to rehire
+        * Discharges because positions were eliminated
+        * Discharges resulting from mergers, downsizing, or plant closings
+        * Firings or other discharges for cause
+        * Terminations of seasonal employees (whether or not they are expected to return next season)
+        * Layoffs (suspensions from pay status) lasting or expected to last more than 7 days. (If the employee was later 
+        recalled, they should be reported as a Hire at the time of recall.)
+        
+* Other Separations: retirements; transfers to other locations; deaths; or separations due to employee disability
+
+##### Does not include: 
+
+* Transfers within the sampled establishment
+* Employees on strike
+* Employees of temporary help agencies, employee leasing companies, outside contractors, or consultants working at the 
+  sampled establishment. These employees are reported by their employer of record.
+  
+##### The separations rate is computed by dividing the number of separations by employment and multiplying that quotient by 100. The quits, layoffs and discharges, and other separations rates are computed similarly.
+
+___
+
+
