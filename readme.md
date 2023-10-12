@@ -33,7 +33,7 @@ year| Year|
 period|BLS code for month of year|
 periodName| Name of month|
 date|Date in YYYY-MM-DD format|
-series|JOLTS series - all seasonally adjusted | tsl = Total separation level  <br> tsr = Total separation rate <br> ldl = Layoff and discharge levels <br> ldr = Layoff and discharge rate <br> ql = Quit level <br> qr = Quit rate <br> hl = Hires level <br> hr = Hires rate |
+series|JOLTS series - all seasonally adjusted | tsl = Total separation level  <br> tsr = Total separation rate <br> ldl = Layoff and discharge levels <br> ldr = Layoff and discharge rate <br> ql = Quit level <br> qr = Quit rate <br> hl = Hires level <br> hr = Hires rate <br> jol = Job openings level <br> jor = Job openings rate |
 value | Series suffix l indicates level value in thousands (value of 1,555 = 1,555,000); <br> series suffix r = rate |
 md_rate | median of series value
 mn_rate | mean of series value
