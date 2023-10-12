@@ -1,7 +1,7 @@
 ### **About**
 
 
-##### This repository automatically checks for and, when warranted, downloads new Bureau of Labor Statistics Job Openings and Labor Turnover Survey (JOLTS) data and publishes a report with a series of visualizations showing the new data in the context of the last 10-years and the last 12-months. 
+##### This repository automatically checks for and, when warranted, downloads new Bureau of Labor Statistics Job Openings and Labor Turnover Survey (JOLTS) data and publishes a [report](https://tedschurter.github.io/jolts_gha/) with a series of visualizations showing the new data in the context of the last 10-years and the last 12-months. 
 
 <br>
 

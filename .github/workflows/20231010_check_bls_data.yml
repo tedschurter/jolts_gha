@@ -2,10 +2,10 @@
 name: check jolts data 
 
 on: 
-  workflow_dispatch:
-  # schedule:
-  #   - cron: "10 2 * * 1,2,3,4,5"  # check every Tuesday, Wednesday and Thursday at 10:10 am 
-  #   # note github actions runs on UTC - 4 hours ahead of eastern time zone
+  
+  schedule:
+    - cron: "10 2 * * 1,2,3,4,5"  # check Monday through Friday at 10:10 am 
+  #   # note github actions runs on UTC.
 
 jobs:
   import-data:
