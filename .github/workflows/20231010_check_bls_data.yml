@@ -4,7 +4,7 @@ name: check jolts data
 on: 
   
   schedule:
-    - cron: "10 2 * * 1,2,3,4,5"  # check Monday through Friday at 10:10 am 
+    - cron: "10 14 * * 1,2,3,4,5"  # check Monday through Friday at 10:10 am 
   #   # note github actions runs on UTC.
 
 jobs:

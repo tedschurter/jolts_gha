@@ -44,7 +44,7 @@ jolts <- data.frame(get_series_tables(
   # group by series and month before calculating median and mean for each series
   group_by(series, period) %>%
   mutate(md_rate = median(value),
-         mn_rate = mean(value)) %>%
+         mn_rate = round(mean(value),2)) %>%
   ungroup() %>%
   arrange(desc(date))
 
