@@ -84,7 +84,7 @@ library(DT)
 
 ```{r, import latest JOLTS data, }
 
-jolts <- read_csv("../clean_data/new_jolts.csv") 
+jolts <- read_csv("clean_data/new_jolts.csv") 
   
 
 ```
@@ -102,14 +102,16 @@ max_mnth_ch <- jolts %>% arrange(desc(year)) %>% slice(1) %>% pull(3)
 
 
 # determine previous mnth
-prev_mnth <- paste0("M", if_else(
-  as.numeric(
-    str_sub(
-      max_mnth, -1)
-  ) 
-  <= 9, "0", ""), 
-  -1+ (as.numeric(str_sub(max_mnth, -1))))
+# prev_mnth <- paste0("M", if_else(
+#   as.numeric(
+#     str_sub(
+#       max_mnth, -1)
+#   ) 
+#   <= 9, "0", ""), 
+#   -1+ (as.numeric(str_sub(max_mnth, -1))))
 
+# 20240115 update: replaced previous prev_mnth code that incorrectly handled months greater than 9; new code is shorter, too.
+prev_mnth <- paste0("M", match(max_mnth_ch, month.name)-1)
 
 max_yr <- max(jolts$year)
 
@@ -669,13 +671,14 @@ ggplot()+
                    year(min(jolts$date)),
                    " to ", 
                    month(max(jolts$date), label = T, abbr = F), " ", year(max(jolts$date)), ".^*^"),
-    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    subtitle = "<br>*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
     
     caption = caption 
     )+
   
   # set theme, make adjustments    
   t_theme()
+  
 ```
 
 ### Levels 
@@ -731,7 +734,7 @@ ggplot()+
                    " to ", 
                    month(max(jolts$date), label = T, abbr = F), " ", year(max(jolts$date)), ".^*^"),
     
-    subtitle = "*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
+    subtitle = "<br>*Job opening:* A specific, full, part-time, permanent, or seasonal position that could be started within 30 days with active recruitment for the position from outside the offering establishment. *Total separations:* quits, layoffs and discharges, and other separations.",
     
     caption = caption
   )+
