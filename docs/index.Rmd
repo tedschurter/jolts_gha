@@ -84,7 +84,7 @@ library(DT)
 
 ```{r, import latest JOLTS data, }
 
-jolts <- read_csv("clean_data/new_jolts.csv") 
+jolts <- read_csv("../clean_data/new_jolts.csv")
   
 
 ```
